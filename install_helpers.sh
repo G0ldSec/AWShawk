@@ -4,7 +4,7 @@
 # Arch:  x86_64/amd64, arm64/aarch64
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIR="${ROOT_DIR}/helper"
 mkdir -p "${HELPER_DIR}"
 cd "${HELPER_DIR}"
