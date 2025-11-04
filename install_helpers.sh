@@ -137,7 +137,7 @@ if [ ! -x "${HELPER_DIR}/jq" ]; then
   if [ $RC -ne 0 ]; then
     echo "[!] Latest jq failed, using fallback version…"
     download "$JQ_FALLBK" "${HELPER_DIR}/jq"
-  end
+  fi
   chmod +x "${HELPER_DIR}/jq"
 else
   echo "[=] jq already present, skipping."
