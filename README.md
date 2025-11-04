@@ -267,12 +267,6 @@ The author is not responsible for misuse or damage caused by this tool.
 
 ---
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details
-
----
-
 ## 🙏 Acknowledgments
 
 - [Gitleaks](https://github.com/gitleaks/gitleaks) - Git secret scanning
