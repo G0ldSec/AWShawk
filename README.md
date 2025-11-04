@@ -16,7 +16,6 @@ A precision AWS credential hunter designed for penetration testing. AWShawk perf
 - **Severity Scoring**: Automatic risk classification (Critical/High/Medium/Low)
 - **Unified Reporting**: CSV index, scored findings, and Markdown reports
 - **Secret Detection**: Pattern matching for AKIA/ASIA keys, secret keys, session tokens
-- **Terraform Analysis**: Deep inspection of `.tfstate`, `.tfvars` files
 - **Git History Scanning**: Integrated gitleaks & trufflehog support
 - **IMDS Enumeration**: EC2 instance metadata service (IMDSv2 + IMDSv1 fallback)
 - **STS Validation**: Optional identity verification for discovered credentials
@@ -54,12 +53,11 @@ chmod +x install_helpers.sh
 
 | Flag | Description |
 |------|-------------|
-| `-all` | Run all checks (env, awsdir, patterns, suspicious, terraform, repos, imds) |
+| `-all` | Run all checks (env, awsdir, patterns, suspicious, repos, imds) |
 | `-env` | Capture AWS-related environment variables |
 | `-awsdir` | Snapshot `~/.aws` directory (credentials, config, SSO cache) |
 | `-patterns` | Deep content scan for AWS access keys and secrets |
 | `-suspicious` | Detect suspicious filenames using heuristics |
-| `-terraform` | Scan Terraform state files and tfvars for embedded secrets |
 | `-repos` | Run gitleaks/trufflehog on discovered Git repositories |
 | `-imds` | Query EC2 Instance Metadata Service for role credentials |
 | `-sts` | Validate discovered credentials via read-only STS calls |
@@ -120,10 +118,6 @@ results/<timestamp>-aws-bastion/
 │   └── cli_cache/
 ├── suspicious_filenames.txt
 ├── aws_pattern_hits.txt     # Content matches with line numbers
-├── terraform/               # Terraform analysis
-│   ├── tf_candidates.txt
-│   ├── samples/
-│   └── *.secrets.txt
 ├── imds.txt                 # IMDS metadata
 ├── imds_creds.json          # Instance role credentials
 ├── gitleaks-*.json          # Gitleaks scan results
@@ -143,11 +137,6 @@ results/<timestamp>-aws-bastion/
 ### Full Reconnaissance with Wide Mode
 ```bash
 ./awshawk.sh -all -wide -redact
-```
-
-### Terraform + Repo Focus
-```bash
-./awshawk.sh -terraform -repos -suspicious
 ```
 
 ### Deep Scan with Custom Settings
@@ -178,8 +167,6 @@ AWShawk hunts for:
 - `~/.aws/credentials`, `~/.aws/config`
 - Environment variables (`AWS_*`, `ACCESS_KEY`, `SECRET_KEY`)
 - `.env`, `.env.*` files
-- Terraform state files (`.tfstate`, `.tfstate.backup`)
-- Terraform variable files (`.tfvars`, `terraform.tfvars`)
 - Serverless configs (`serverless.yml`)
 - Application properties files
 
@@ -201,7 +188,6 @@ AWShawk hunts for:
 
 **Special Cases:**
 - IMDSv1 accessible without token → **High**
-- Terraform state with embedded secrets → **High**
 
 ---
 
@@ -232,7 +218,7 @@ Place these in `./helper/` for full functionality:
 | `gitleaks` | Git secret scanning | `-repos` |
 | `trufflehog` | Filesystem secret scanning | `-repos` |
 | `aws` | AWS CLI for STS validation | `-sts` |
-| `jq` | JSON parsing | Terraform analysis, pretty output |
+| `jq` | JSON parsing |
 
 *All binaries optional; AWShawk adapts to available tools.*
 
@@ -300,5 +286,5 @@ MIT License - see [LICENSE](LICENSE) for details
 For bugs, feature requests, or security concerns, please open an issue on GitHub.
 
 ---
-
-*"Sharp eyes find what others miss."* 🦅
+## 💌 Coming Soon:
+- **Terraform Analysis**: Deep inspection of `.tfstate`, `.tfvars` files
