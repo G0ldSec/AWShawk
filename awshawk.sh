@@ -236,8 +236,10 @@ if [ "$DO_SUSPICIOUS" = true ]; then
   : > "${OUTDIR}/suspicious_filenames.txt"
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
-      | egrep -i "${NAME_REGEX}" >> "${OUTDIR}/suspicious_filenames.txt" || true
+find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
+  | egrep -v "${EXCLUDE_PATTERN}" \
+  | egrep -i "${NAME_REGEX}" >> "${OUTDIR}/suspicious_filenames.txt" || true
+
   done
 fi
 
@@ -252,9 +254,11 @@ if [ "$DO_TERRAFORM" = true ]; then
   : > "${TF_OUT_DIR}/tf_candidates.txt"
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
-      \( -name '*.tfstate' -o -name '*.tfstate.backup' -o -name '*.tfvars' -o -name 'terraform.tfvars*' \) \
-      >> "${TF_OUT_DIR}/tf_candidates.txt" || true
+find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
+  \( -name '*.tfstate' -o -name '*.tfstate.backup' -o -name '*.tfvars' -o -name 'terraform.tfvars*' \) \
+  | egrep -v "${EXCLUDE_PATTERN}" \
+  >> "${TF_OUT_DIR}/tf_candidates.txt"
+
   done
 
   # Avoid reading if file is empty or missing (this previously caused set -e to exit in some envs)
@@ -323,9 +327,9 @@ if [ "$DO_PATTERNS" = true ]; then
 
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
-      | while read -r f; do scan_file_content "$f"; done
-  done
+find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
+  | egrep -v "${EXCLUDE_PATTERN}" \
+  | while read -r f; do scan_file_content "$f"; done
 fi
 
 # -----------------------------
