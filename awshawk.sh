@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-#
-#
 set -euo pipefail
-
 shopt -s nullglob
 
 print_banner() {
@@ -15,7 +12,6 @@ print_banner() {
 
 by ChiZu
 https://github.com/G0ldSec
-
 BANNER
 }
 
@@ -29,7 +25,6 @@ Flags:
   -awsdir       snapshot ~/.aws
   -patterns     wide content scan for AWS patterns
   -suspicious   suspicious filename heuristics
-  -terraform    terraform state/tfvars scan
   -repos        run bundled gitleaks/trufflehog on repos
   -imds         EC2 IMDS role/creds check
   -sts          read-only STS identity checks (authorized only)
@@ -41,9 +36,9 @@ Flags:
 
 Env:
   SCAN_WIDE=true|false      default: false
-  MAX_DEPTH (default 8)     find -maxdepth used in scans
-  MAX_SIZE_BYTES (default 5242880) max file size to inspect
-  SCAN_BINARIES=true|false  default: false (skip binary files by magic)
+  MAX_DEPTH (default 8)
+  MAX_SIZE_BYTES (default 5242880)
+  SCAN_BINARIES=true|false  default: false
 USAGE
 }
 
@@ -60,19 +55,18 @@ TS="$(date +%Y%m%dT%H%M%S)"
 OUTDIR="${RESULTS_BASE}/${TS}-aws-bastion"
 mkdir -p "${OUTDIR}"
 export PATH="${HELPER_DIR}:${PATH}"
-# -----------------------------
-# exclude our own results from scans (avoid self-scanning outputs)
-# -----------------------------
-# Build a safe regex for RESULTS_BASE by escaping slashes & dots
-RESULTS_BASE_REGEX="${RESULTS_BASE//\\/\\\\}"   # escape backslashes first
-RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//\//\\/}"  # escape slashes
-RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//./\\.}"   # escape dots
 
-# final pattern matches any path under results dir
+# -----------------------------
+# exclude our own results (avoid self-scanning)
+# -----------------------------
+RESULTS_BASE_REGEX="${RESULTS_BASE//\\/\\\\}"
+RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//\//\\/}"
+RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//./\\.}"
 EXCLUDE_PATTERN="^${RESULTS_BASE_REGEX}/"
 
-
-# Default tuning
+# -----------------------------
+# Defaults
+# -----------------------------
 SCAN_WIDE="${SCAN_WIDE:-false}"
 MAX_DEPTH="${MAX_DEPTH:-8}"
 MAX_SIZE_BYTES="${MAX_SIZE_BYTES:-5242880}"   # 5 MiB
@@ -89,32 +83,28 @@ HAS_TRUFFLEHOG=false
 if [ -x "${TRUFFLEHOG_BIN}" ]; then
   HAS_TRUFFLEHOG=true
 elif command -v trufflehog >/dev/null 2>&1; then
-  TRUFFLEHOG_BIN="$(command -v trufflehog)"
-  HAS_TRUFFLEHOG=true
+  TRUFFLEHOG_BIN="$(command -v trufflehog)"; HAS_TRUFFLEHOG=true
 fi
 
 HAS_GITLEAKS=false
 if [ -x "${GITLEAKS_BIN}" ]; then
   HAS_GITLEAKS=true
 elif command -v gitleaks >/dev/null 2>&1; then
-  GITLEAKS_BIN="$(command -v gitleaks)"
-  HAS_GITLEAKS=true
+  GITLEAKS_BIN="$(command -v gitleaks)"; HAS_GITLEAKS=true
 fi
 
 HAS_JQ=false
 if [ -x "${JQ_BIN}" ]; then
   HAS_JQ=true
 elif command -v jq >/dev/null 2>&1; then
-  JQ_BIN="$(command -v jq)"
-  HAS_JQ=true
+  JQ_BIN="$(command -v jq)"; HAS_JQ=true
 fi
 
 HAS_AWSCLI=false
 if [ -x "${AWSCLI_BIN}" ]; then
   HAS_AWSCLI=true
 elif command -v aws >/dev/null 2>&1; then
-  AWSCLI_BIN="$(command -v aws)"
-  HAS_AWSCLI=true
+  AWSCLI_BIN="$(command -v aws)"; HAS_AWSCLI=true
 fi
 
 # -----------------------------
@@ -125,7 +115,6 @@ DO_ENV=false
 DO_AWSDIR=false
 DO_PATTERNS=false
 DO_SUSPICIOUS=false
-DO_TERRAFORM=false
 DO_REPOS=false
 DO_IMDS=false
 DO_STS=false
@@ -139,7 +128,6 @@ while [ "$#" -gt 0 ]; do
     -awsdir) DO_AWSDIR=true ;;
     -patterns) DO_PATTERNS=true ;;
     -suspicious) DO_SUSPICIOUS=true ;;
-    -terraform) DO_TERRAFORM=true ;;
     -repos) DO_REPOS=true ;;
     -imds) DO_IMDS=true ;;
     -sts) DO_STS=true ;;
@@ -154,11 +142,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$DO_ALL" = true ]; then
-  DO_ENV=true; DO_AWSDIR=true; DO_PATTERNS=true; DO_SUSPICIOUS=true; DO_TERRAFORM=true; DO_REPOS=true; DO_IMDS=true
+  DO_ENV=true; DO_AWSDIR=true; DO_PATTERNS=true; DO_SUSPICIOUS=true; DO_REPOS=true; DO_IMDS=true
 fi
 
-# If no flags selected, print help
-if ! $DO_ALL && ! $DO_ENV && ! $DO_AWSDIR && ! $DO_PATTERNS && ! $DO_SUSPICIOUS && ! $DO_TERRAFORM && ! $DO_REPOS && ! $DO_IMDS && ! $DO_STS; then
+if ! $DO_ALL && ! $DO_ENV && ! $DO_AWSDIR && ! $DO_PATTERNS && ! $DO_SUSPICIOUS && ! $DO_REPOS && ! $DO_IMDS && ! $DO_STS; then
   print_usage; echo; echo "Tip: try './awshawk.sh -all -wide -redact'"; exit 0
 fi
 
@@ -183,11 +170,9 @@ else
   CANDIDATE_PATHS=("${BASE_PATHS[@]}")
 fi
 
-# Extra paths (colon-separated)
 IFS=':' read -r -a EXTRA_ARR <<< "${EXTRA_PATHS:-}"
 for p in "${EXTRA_ARR[@]}"; do [ -n "$p" ] && CANDIDATE_PATHS+=("$p"); done
 
-# Deduplicate
 mapfile -t CANDIDATE_PATHS < <(printf "%s\n" "${CANDIDATE_PATHS[@]}" | awk 'NF && !x[$0]++')
 printf "%s\n" "${CANDIDATE_PATHS[@]}" > "${OUTDIR}/paths_considered.txt"
 
@@ -202,7 +187,6 @@ log "Start (wide=${SCAN_WIDE}, depth=${MAX_DEPTH}, max_size=${MAX_SIZE_BYTES}, s
   echo "hostname: $(hostname -f 2>/dev/null || hostname)"
   echo "kernel: $(uname -a)"
   echo "helpers: trufflehog=${HAS_TRUFFLEHOG} gitleaks=${HAS_GITLEAKS} awscli=${HAS_AWSCLI} jq=${HAS_JQ}"
-  # Log actual binary paths used (if any)
   echo "TRUFFLEHOG_BIN=${TRUFFLEHOG_BIN:-<none>}"
   echo "GITLEAKS_BIN=${GITLEAKS_BIN:-<none>}"
   echo "JQ_BIN=${JQ_BIN:-<none>}"
@@ -247,74 +231,14 @@ if [ "$DO_SUSPICIOUS" = true ]; then
   : > "${OUTDIR}/suspicious_filenames.txt"
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
-  | egrep -v "${EXCLUDE_PATTERN}" \
-  | egrep -i "${NAME_REGEX}" >> "${OUTDIR}/suspicious_filenames.txt" || true
-
+    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
+      | egrep -v "${EXCLUDE_PATTERN}" \
+      | egrep -i "${NAME_REGEX}" >> "${OUTDIR}/suspicious_filenames.txt" || true
   done
 fi
 
 # -----------------------------
-# 4) Terraform state & tfvars scan
-# -----------------------------
-if [ "$DO_TERRAFORM" = true ]; then
-  log "Terraform state / tfvars scan"
-  TF_OUT_DIR="${OUTDIR}/terraform"
-  mkdir -p "${TF_OUT_DIR}"
-
-  : > "${TF_OUT_DIR}/tf_candidates.txt"
-  for p in "${CANDIDATE_PATHS[@]}"; do
-    [ -d "$p" ] || continue
-find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
-  \( -name '*.tfstate' -o -name '*.tfstate.backup' -o -name '*.tfvars' -o -name 'terraform.tfvars*' \) \
-  | egrep -v "${EXCLUDE_PATTERN}" \
-  >> "${TF_OUT_DIR}/tf_candidates.txt"
-
-  done
-
-  # Avoid reading if file is empty or missing (this previously caused set -e to exit in some envs)
-  if [ -s "${TF_OUT_DIR}/tf_candidates.txt" ]; then
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      # guard in case file vanished between find and processing
-      [ -r "$f" ] || continue
-      base="$(echo "$f" | tr '/ ' '__')"
-      # Copy small file for evidence
-      if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -le "$MAX_SIZE_BYTES" ]; then
-        copy_if_readable "$f" "terraform/samples/${base}"
-      fi
-
-      # If jq available and file appears to be JSON, use jq (guarded)
-      if [ "${HAS_JQ}" = "true" ]; then
-        if file "$f" 2>/dev/null | grep -qi 'json'; then
-          # run jq guarded; if jq fails we continue
-          {
-            "${JQ_BIN}" 'paths | map(tostring) | join(".")' "$f" > "${TF_OUT_DIR}/${base}.paths.txt" 2>/dev/null || true
-            for key in access_key secret_key token akid aws_access_key_id aws_secret_access_key aws_session_token; do
-              "${JQ_BIN}" -r ".. | .\"$key\"? // empty" "$f" 2>/dev/null | sed 's/^/VAL: /' >> "${TF_OUT_DIR}/${base}.secrets.txt" || true
-            done
-            "${JQ_BIN}" -r '.. | objects | select(has("type")) | .type' "$f" 2>/dev/null | sort -u > "${TF_OUT_DIR}/${base}.types.txt" 2>/dev/null || true
-          } || true
-        else
-          # fallback grep if not JSON
-          grep -nEi 'aws_access_key_id|aws_secret_access_key|session_token|access.?key|secret.?key|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' "$f" \
-            > "${TF_OUT_DIR}/${base}.secrets.grep.txt" 2>/dev/null || true
-          grep -nEi '"type"\s*:\s*"aws_[a-z_]+"' "$f" > "${TF_OUT_DIR}/${base}.types.grep.txt" 2>/dev/null || true
-        fi
-      else
-        # jq not available: use grep-only path
-        grep -nEi 'aws_access_key_id|aws_secret_access_key|session_token|access.?key|secret.?key|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' "$f" \
-          > "${TF_OUT_DIR}/${base}.secrets.grep.txt" 2>/dev/null || true
-        grep -nEi '"type"\s*:\s*"aws_[a-z_]+"' "$f" > "${TF_OUT_DIR}/${base}.types.grep.txt" 2>/dev/null || true
-      fi
-    done < "${TF_OUT_DIR}/tf_candidates.txt"
-  else
-    log "No terraform candidates found (skipping processing step)"
-  fi
-fi
-
-# -----------------------------
-# 5) Content pattern scan (AWS)
+# 4) Content pattern scan (AWS)
 # -----------------------------
 if [ "$DO_PATTERNS" = true ]; then
   log "Deep content scan for AWS patterns"
@@ -338,14 +262,14 @@ if [ "$DO_PATTERNS" = true ]; then
 
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
-  | egrep -v "${EXCLUDE_PATTERN}" \
-  | while read -r f; do scan_file_content "$f"; done
+    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
+      | egrep -v "${EXCLUDE_PATTERN}" \
+      | while read -r f; do scan_file_content "$f"; done
   done
 fi
 
 # -----------------------------
-# 6) IMDS
+# 5) IMDS
 # -----------------------------
 if [ "$DO_IMDS" = true ]; then
   log "IMDS query"
@@ -371,7 +295,7 @@ if [ "$DO_IMDS" = true ]; then
 fi
 
 # -----------------------------
-# 7) Repos (gitleaks / trufflehog)
+# 6) Repos (gitleaks / trufflehog)
 # -----------------------------
 if [ "$DO_REPOS" = true ]; then
   log "Repo discovery + bundled scanners"
@@ -393,7 +317,6 @@ if [ "$DO_REPOS" = true ]; then
     log "Running gitleaks on ${#REPO_DIRS[@]} target(s) using ${GITLEAKS_BIN}"
     for d in "${REPO_DIRS[@]}"; do
       outj="${OUTDIR}/gitleaks-$(echo "$d" | tr '/ ' '__').json"
-      # guard: run gitleaks but don't fail the whole script on errors
       set +e
       "${GITLEAKS_BIN}" detect --source="$d" --report-path="$outj" 2>>"${OUTDIR}/gitleaks.err" || true
       set -e
@@ -416,23 +339,20 @@ if [ "$DO_REPOS" = true ]; then
 fi
 
 # -----------------------------
-# 8) Optional STS validation (authorized only)
+# 7) Optional STS validation (authorized only)
 # -----------------------------
 if [ "$DO_STS" = true ] && [ "${HAS_AWSCLI}" = "true" ]; then
   log "STS read-only identity checks (authorized only) using ${AWSCLI_BIN}"
-  # env creds
   if env | egrep -qi 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN'; then
     AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
       "${AWSCLI_BIN}" sts get-caller-identity --output json > "${OUTDIR}/sts_env.json" 2>"${OUTDIR}/sts_env.err" || true
   fi
-  # profiles
   if [ -f "$HOME/.aws/credentials" ]; then
     awk -F '[][]' '/\[/{print $2}' "$HOME/.aws/credentials" | while read -r prof; do
       [ -n "$prof" ] || continue
       AWS_PROFILE="$prof" "${AWSCLI_BIN}" sts get-caller-identity --output json > "${OUTDIR}/sts_profile_${prof}.json" 2>"${OUTDIR}/sts_profile_${prof}.err" || true
     done
   fi
-  # imds temp creds if captured
   if [ -f "${OUTDIR}/imds_creds.json" ]; then
     AKID="$(grep -Eo '"AccessKeyId"\s*:\s*"[^"]+"' "${OUTDIR}/imds_creds.json" | head -n1 | cut -d'"' -f4 || true)"
     SKEY="$(grep -Eo '"SecretAccessKey"\s*:\s*"[^"]+"' "${OUTDIR}/imds_creds.json" | head -n1 | cut -d'"' -f4 || true)"
@@ -445,7 +365,7 @@ if [ "$DO_STS" = true ] && [ "${HAS_AWSCLI}" = "true" ]; then
 fi
 
 # -----------------------------
-# 9) Unified hits index + severity scoring
+# 8) Unified hits index + scoring
 # -----------------------------
 log "Build unified hits index and severity scoring"
 INDEX="${OUTDIR}/hits_index.csv"
@@ -471,30 +391,7 @@ if [ -f "${OUTDIR}/suspicious_filenames.txt" ]; then
     "${OUTDIR}/suspicious_filenames.txt" >> "$INDEX"
 fi
 
-# Terraform artifacts
-if [ -d "${OUTDIR}/terraform" ]; then
-  # handle secrets.grep.txt entries
-  find "${OUTDIR}/terraform" -type f -name '*.secrets.grep.txt' -readable 2>/dev/null | while read -r f; do
-    src=$(basename "$f" | sed 's/\.secrets\.grep\.txt$//')
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      ln_no=$(echo "$line" | awk -F: '{print $1}')
-      detail=$(echo "$line" | cut -d: -f2- | sed 's/"/""/g')
-      printf "terraform,content,\"%s\",%s,\"%s\"\n" "$src" "${ln_no:-}" "$detail" >> "$INDEX"
-    done < "$f"
-  done
-  # handle .secrets.txt (jq path)
-  find "${OUTDIR}/terraform" -type f -name '*.secrets.txt' -readable 2>/dev/null | while read -r f; do
-    src=$(basename "$f" | sed 's/\.secrets\.txt$//')
-    while IFS= read -r val; do
-      [ -n "$val" ] || continue
-      detail=$(echo "$val" | sed 's/^VAL: //; s/"/""/g')
-      printf "terraform,json,\"%s\",,\"%s\"\n" "$src" "$detail" >> "$INDEX"
-    done < "$f"
-  done
-fi
-
-# gitleaks JSON (guarded: require jq)
+# gitleaks JSON
 if [ "${HAS_JQ}" = "true" ]; then
   for j in "${OUTDIR}"/gitleaks-*.json; do
     [ -f "$j" ] || continue
@@ -510,7 +407,7 @@ if [ "${HAS_JQ}" = "true" ]; then
   done
 fi
 
-# trufflehog JSON (line-delimited) (guarded)
+# trufflehog JSON (line-delimited)
 if [ "${HAS_JQ}" = "true" ]; then
   for j in "${OUTDIR}"/trufflehog-*.json; do
     [ -f "$j" ] || continue
@@ -572,10 +469,6 @@ tail -n +2 "$INDEX" | while IFS= read -r row; do
     echo "$detail" | egrep -qi "$BENIGN_RE" && [ "$sev" = "low" ] && sev="low"
   fi
 
-  if [ "$src" = "terraform" ]; then
-    echo "$detail" | egrep -qi "$SKEY_RE|$AKIA_RE" && { [ "$sev" = "medium" -o "$sev" = "low" ] && sev="high"; }
-  fi
-
   printf "%s,%s,%s,\"%s\",%s,\"%s\"\n" "$sev" "$src" "$typ" "$file" "$line" "$detail" >> "$SCORED"
 done
 
@@ -607,7 +500,7 @@ echo "  - Scored CSV:    ${SCORED}"
 echo "  - Markdown:      ${MD}"
 
 # -----------------------------
-# 10) Summary (+ optional redacted)
+# 9) Summary (+ optional redacted)
 # -----------------------------
 log "Write summary"
 {
@@ -621,7 +514,6 @@ log "Write summary"
   [ -f "${OUTDIR}/env_aws_vars.txt" ] && { echo "Env AWS vars (first 50):"; first_n "${OUTDIR}/env_aws_vars.txt" 50; echo; }
   [ -f "${OUTDIR}/suspicious_filenames.txt" ] && { echo "Suspicious filenames (first 200):"; first_n "${OUTDIR}/suspicious_filenames.txt" 200; echo; }
   [ -f "${OUTDIR}/aws_pattern_hits.txt" ] && { echo "Pattern hits (first 250):"; first_n "${OUTDIR}/aws_pattern_hits.txt" 250; echo; }
-  [ -f "${OUTDIR}/terraform/tf_candidates.txt" ] && { echo "Terraform candidates:"; first_n "${OUTDIR}/terraform/tf_candidates.txt" 200; echo; }
   [ -f "${OUTDIR}/imds.txt" ] && { echo "IMDS (first 60):"; first_n "${OUTDIR}/imds.txt" 60; echo; }
   [ -f "${OUTDIR}/scan_targets.txt" ] && { echo "Repo scan targets:"; first_n "${OUTDIR}/scan_targets.txt" 200; echo; }
 } > "${OUTDIR}/summary.txt"
