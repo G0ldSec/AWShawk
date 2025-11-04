@@ -7,109 +7,12 @@ set -euo pipefail
 
 print_banner() {
   cat <<'BANNER'
-    ___        ______  _                    _
-   / \ \      / / ___|| |__   __ ___      _| | __
-  / _ \ \ /\ / /\___ \| '_ \ / _` \ \ /\ / / |/ /
- / ___ \ V  V /  ___) | | | | (_| |\ V  V /|   
-/_/   \_\_/\_/  |____/|_| |_|\__,_| \_/\_/ |_|\_\
-
-by ChiZu
-https://github.com/G0ldSec
-
-BANNER
-}
-
-print_usage() {
-  cat <<'USAGE'
-Usage: ./awshawk.sh [flags]
-
-Flags:
-  -all          run all checks
-  -env          capture AWS-related environment
-  -awsdir       snapshot ~/.aws
-  -patterns     wide content scan for AWS patterns
-  -suspicious   suspicious filename heuristics
-  -terraform    terraform state/tfvars scan
-  -repos        run bundled gitleaks/trufflehog on repos
-  -imds         EC2 IMDS role/creds check
-  -sts          read-only STS identity checks (authorized only)
-  -redact       produce an additional redacted summary
-  -wide         crawl all readable dirs from /
-  -nowide       force narrow mode
-  -paths "a:b"  add extra search roots (colon-separated)
-  -h|-help      show this help
-
-Env:
-  SCAN_WIDE=true|false      default: false
-  MAX_DEPTH (default 8)     find -maxdepth used in scans
-  MAX_SIZE_BYTES (default 5242880) max file size to inspect
-  SCAN_BINARIES=true|false  default: false (skip binary files by magic)
-USAGE
-}
-
-# Print banner first
-print_banner
-
-# -----------------------------
-# Repo & helpers
-# -----------------------------
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# ... rest of your script continues
-
-The banner will now display every time the script runs, right at the start before any processing begins. The <<'BANNER' syntax (with quotes) ensures the ASCII art is printed exactly as-is without any bash interpretation.
-
-so like this:
-
-Almost! You have some duplicates. Here's the cleaned-up version:
-bash
-
-#!/usr/bin/env bash
-#
-# awshawk.sh
-# AWS credential hunter for red team operations
-# AWS-only, non-root bastion check with modular flags, Wide Mode, Terraform scan,
-# unified hit index, severity scoring, and optional redacted summary.
-#
-# Uses helper binaries from ./helper/ (no installs). All results in:
-#   ./results/<timestamp>-aws-bastion
-#
-# Flags (combine as needed):
-#   -all          : run all checks (-env -awsdir -patterns -suspicious -terraform -repos -imds)
-#   -env          : capture AWS-related environment variables
-#   -awsdir       : snapshot ~/.aws (credentials/config/sso/cli cache/history)
-#   -patterns     : deep content scan for AWS patterns (AKIA..., ASIA..., etc.)
-#   -suspicious   : list suspicious filenames (name heuristics)
-#   -terraform    : scan *.tfstate / *.tfvars / terraform.tfvars* for embedded secrets
-#   -repos        : run bundled gitleaks/trufflehog on discovered repos
-#   -imds         : query IMDSv2 (fallback v1) for instance role & temp creds
-#   -sts          : read-only STS identity checks (authorized only; requires helper/aws)
-#   -redact       : additionally produce a redacted summary (mask secrets)
-#   -wide         : crawl all readable paths from / (minus noisy system dirs)
-#   -nowide       : force narrow mode even if SCAN_WIDE env is set
-#   -paths "a:b"  : add extra search roots (colon-separated)
-#   -h|-help      : show help
-#
-# Env (optional):
-#   SCAN_WIDE=true|false      default: false (use -wide to enable)
-#   MAX_DEPTH=<int>           default: 8 (find -maxdepth)
-#   MAX_SIZE_BYTES=<int>      default: 5242880 (5 MiB)
-#   SCAN_BINARIES=true|false  default: false (skip non-text by magic; set true = aggressive)
-#
-# Examples:
-#   ./awshawk.sh -all -wide -redact
-#   MAX_DEPTH=10 MAX_SIZE_BYTES=$((10*1024*1024)) ./awshawk.sh -patterns -terraform -repos -wide
-#   ./awshawk.sh -imds -env -awsdir
-#
-set -euo pipefail
-
-print_banner() {
-  cat <<'BANNER'
     ___        ______  _                    _    
    / \ \      / / ___|| |__   __ ___      _| | __
   / _ \ \ /\ / /\___ \| '_ \ / _` \ \ /\ / / |/ /
  / ___ \ V  V /  ___) | | | | (_| |\ V  V /|   < 
 /_/   \_\_/\_/  |____/|_| |_|\__,_| \_/\_/ |_|\_\
-                                                  
+
 by ChiZu
 https://github.com/G0ldSec
 
@@ -185,7 +88,7 @@ DO_STS=false
 DO_REDACT=false
 EXTRA_PATHS=""
 
-while (( "$#" )); do
+while [ "$#" -gt 0 ]; do
   case "${1:-}" in
     -all) DO_ALL=true ;;
     -env) DO_ENV=true ;;
@@ -203,7 +106,7 @@ while (( "$#" )); do
     -h|-help|--help) print_usage; exit 0 ;;
     *) echo "Unknown flag: $1"; print_usage; exit 1 ;;
   esac
-  shift || true
+  shift
 done
 
 if [ "$DO_ALL" = true ]; then
