@@ -60,6 +60,17 @@ TS="$(date +%Y%m%dT%H%M%S)"
 OUTDIR="${RESULTS_BASE}/${TS}-aws-bastion"
 mkdir -p "${OUTDIR}"
 export PATH="${HELPER_DIR}:${PATH}"
+# -----------------------------
+# exclude our own results from scans (avoid self-scanning outputs)
+# -----------------------------
+# Build a safe regex for RESULTS_BASE by escaping slashes & dots
+RESULTS_BASE_REGEX="${RESULTS_BASE//\\/\\\\}"   # escape backslashes first
+RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//\//\\/}"  # escape slashes
+RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//./\\.}"   # escape dots
+
+# final pattern matches any path under results dir
+EXCLUDE_PATTERN="^${RESULTS_BASE_REGEX}/"
+
 
 # Default tuning
 SCAN_WIDE="${SCAN_WIDE:-false}"
@@ -330,6 +341,7 @@ if [ "$DO_PATTERNS" = true ]; then
 find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
   | egrep -v "${EXCLUDE_PATTERN}" \
   | while read -r f; do scan_file_content "$f"; done
+  done
 fi
 
 # -----------------------------
