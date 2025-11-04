@@ -53,8 +53,10 @@ HELPER_DIR="${REPO_DIR}/helper"
 RESULTS_BASE="${REPO_DIR}/results"
 TS="$(date +%Y%m%dT%H%M%S)"
 OUTDIR="${RESULTS_BASE}/${TS}-aws-bastion"
-mkdir -p "${OUTDIR}"
 export PATH="${HELPER_DIR}:${PATH}"
+
+# Lazy creation von OUTDIR
+ensure_outdir() { [ -d "${OUTDIR}" ] || mkdir -p "${OUTDIR}"; }
 
 # -----------------------------
 # exclude our own results (avoid self-scanning)
@@ -63,6 +65,7 @@ RESULTS_BASE_REGEX="${RESULTS_BASE//\\/\\\\}"
 RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//\//\\/}"
 RESULTS_BASE_REGEX="${RESULTS_BASE_REGEX//./\\.}"
 EXCLUDE_PATTERN="^${RESULTS_BASE_REGEX}/"
+: "${EXCLUDE_PATTERN:=^$}"   # Fallback, falls leer
 
 # -----------------------------
 # Defaults
@@ -145,6 +148,7 @@ if [ "$DO_ALL" = true ]; then
   DO_ENV=true; DO_AWSDIR=true; DO_PATTERNS=true; DO_SUSPICIOUS=true; DO_REPOS=true; DO_IMDS=true
 fi
 
+# Wenn nichts zu tun ist: nur Hilfe zeigen, keinen OUTDIR anlegen
 if ! $DO_ALL && ! $DO_ENV && ! $DO_AWSDIR && ! $DO_PATTERNS && ! $DO_SUSPICIOUS && ! $DO_REPOS && ! $DO_IMDS && ! $DO_STS; then
   print_usage; echo; echo "Tip: try './awshawk.sh -all -wide -redact'"; exit 0
 fi
@@ -152,9 +156,18 @@ fi
 # -----------------------------
 # Logging helpers
 # -----------------------------
-log() { printf '%s %s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')]" "$*" | tee -a "${OUTDIR}/run.log" >&2; }
+log() {
+  ensure_outdir
+  printf '%s %s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')]" "$*" | tee -a "${OUTDIR}/run.log" >&2
+}
 first_n() { head -n "${2:-100}" "$1" 2>/dev/null || true; }
-copy_if_readable() { local s="$1" d="$2"; [ -e "$s" ] && [ -r "$s" ] && { mkdir -p "$(dirname "${OUTDIR}/$d")"; cp -a "$s" "${OUTDIR}/$d" 2>/dev/null || true; }; }
+copy_if_readable() {
+  local s="$1" d="$2"
+  [ -e "$s" ] && [ -r "$s" ] || return 0
+  ensure_outdir
+  mkdir -p "$(dirname "${OUTDIR}/$d")"
+  cp -a "$s" "${OUTDIR}/$d" 2>/dev/null || true
+}
 
 # -----------------------------
 # Path set (wide vs narrow)
@@ -165,7 +178,9 @@ EXCLUDES_REGEX="^(/proc|/sys|/dev|/run|/boot|/snap|/lost\+found|/var/log/journal
 
 if [ "$SCAN_WIDE" = true ]; then
   CANDIDATE_PATHS=("$HOME")
-  while IFS= read -r d; do CANDIDATE_PATHS+=("$d"); done < <(find / -xdev -maxdepth 2 -type d -readable 2>/dev/null | egrep -v "${EXCLUDES_REGEX}" | sort -u)
+  while IFS= read -r d; do CANDIDATE_PATHS+=("$d"); done < <(
+    find / -xdev -maxdepth 2 -type d -readable 2>/dev/null | grep -Ev "${EXCLUDES_REGEX}" | sort -u
+  )
 else
   CANDIDATE_PATHS=("${BASE_PATHS[@]}")
 fi
@@ -174,12 +189,15 @@ IFS=':' read -r -a EXTRA_ARR <<< "${EXTRA_PATHS:-}"
 for p in "${EXTRA_ARR[@]}"; do [ -n "$p" ] && CANDIDATE_PATHS+=("$p"); done
 
 mapfile -t CANDIDATE_PATHS < <(printf "%s\n" "${CANDIDATE_PATHS[@]}" | awk 'NF && !x[$0]++')
+
+ensure_outdir
 printf "%s\n" "${CANDIDATE_PATHS[@]}" > "${OUTDIR}/paths_considered.txt"
 
 # -----------------------------
 # Basic info
 # -----------------------------
 log "Start (wide=${SCAN_WIDE}, depth=${MAX_DEPTH}, max_size=${MAX_SIZE_BYTES}, scan_binaries=${SCAN_BINARIES})"
+ensure_outdir
 {
   echo "timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   echo "whoami: $(whoami)"
@@ -198,7 +216,8 @@ log "Start (wide=${SCAN_WIDE}, depth=${MAX_DEPTH}, max_size=${MAX_SIZE_BYTES}, s
 # -----------------------------
 if [ "$DO_ENV" = true ]; then
   log "Collect env (AWS-related)"
-  env | egrep -i '(^|[^A-Z_])AWS|ACCESS_KEY|SECRET_KEY|SESSION_TOKEN|AWS_PROFILE|AWS_REGION' > "${OUTDIR}/env_aws_vars.txt" 2>/dev/null || true
+  ensure_outdir
+  env | grep -Ei '(^|[^A-Z_])AWS|ACCESS_KEY|SECRET_KEY|SESSION_TOKEN|AWS_PROFILE|AWS_REGION' > "${OUTDIR}/env_aws_vars.txt" 2>/dev/null || true
 fi
 
 # -----------------------------
@@ -207,6 +226,7 @@ fi
 if [ "$DO_AWSDIR" = true ]; then
   log "Snapshot ~/.aws"
   if [ -d "$HOME/.aws" ] && [ -r "$HOME/.aws" ]; then
+    ensure_outdir
     mkdir -p "${OUTDIR}/aws_home"
     copy_if_readable "$HOME/.aws/credentials" "aws_home/credentials"
     copy_if_readable "$HOME/.aws/config"      "aws_home/config"
@@ -218,6 +238,7 @@ if [ "$DO_AWSDIR" = true ]; then
       echo "=== ~/.aws/config (first 150) ==="; first_n "$HOME/.aws/config" 150
     } > "${OUTDIR}/aws_home_preview.txt"
   else
+    ensure_outdir
     echo "~/.aws not present or not readable" > "${OUTDIR}/aws_home_preview.txt"
   fi
 fi
@@ -227,13 +248,16 @@ fi
 # -----------------------------
 if [ "$DO_SUSPICIOUS" = true ]; then
   log "Suspicious filename heuristics"
+  ensure_outdir
   NAME_REGEX='(^|/)\.env(\.|$)|(^|/)\.aws($|/)|credentials(\.txt|\.ini|\.cfg)?$|aws.*(cred|key|secret)|secrets?(\.ya?ml|\.json|\.tfvars|\.env)?$|config(\.json|\.ya?ml)?$|terraform\.tfstate(\.backup)?$|serverless\.ya?ml$|application(-.*)?\.properties$|credentials\.csv$'
   : > "${OUTDIR}/suspicious_filenames.txt"
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
-      | egrep -v "${EXCLUDE_PATTERN}" \
-      | egrep -i "${NAME_REGEX}" >> "${OUTDIR}/suspicious_filenames.txt" || true
+    {
+      find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable 2>/dev/null \
+        | grep -Ev "${EXCLUDE_PATTERN}" \
+        | grep -Ei "${NAME_REGEX}"
+    } >> "${OUTDIR}/suspicious_filenames.txt" || true
   done
 fi
 
@@ -242,6 +266,7 @@ fi
 # -----------------------------
 if [ "$DO_PATTERNS" = true ]; then
   log "Deep content scan for AWS patterns"
+  ensure_outdir
   AWS_PATTERNS='AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|A3T[A-Z0-9]{13}|aws_access_key_id|aws_secret_access_key|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|aws_session_token|AWS_SESSION_TOKEN|aws_default_region|AWS_DEFAULT_REGION|sso_start_url|sso_region|sso_account_id|sso_role_name'
   PATTERN_OUT="${OUTDIR}/aws_pattern_hits.txt"
   : > "${PATTERN_OUT}"
@@ -249,7 +274,7 @@ if [ "$DO_PATTERNS" = true ]; then
   scan_file_content() {
     local f="$1"
     if [ "$SCAN_BINARIES" != "true" ]; then
-      file "$f" 2>/dev/null | egrep -qi 'text|utf-8|ascii|json|ya?ml|xml|pem|ini|toml|conf|config|sh|bash|zsh|env|properties|csv' || return 0
+      file "$f" 2>/dev/null | grep -Eqi 'text|utf-8|ascii|json|ya?ml|xml|pem|ini|toml|conf|config|sh|bash|zsh|env|properties|csv' || return 0
     fi
     if grep -IEnH --binary-files=without-match -m 1 -E "${AWS_PATTERNS}" "$f" >/dev/null 2>&1; then
       {
@@ -262,9 +287,11 @@ if [ "$DO_PATTERNS" = true ]; then
 
   for p in "${CANDIDATE_PATHS[@]}"; do
     [ -d "$p" ] || continue
-    find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
-      | egrep -v "${EXCLUDE_PATTERN}" \
-      | while read -r f; do scan_file_content "$f"; done
+    {
+      find "$p" -xdev -maxdepth "$MAX_DEPTH" -type f -readable -size -"${MAX_SIZE_BYTES}"c 2>/dev/null \
+        | grep -Ev "${EXCLUDE_PATTERN}" \
+        | while read -r f; do scan_file_content "$f"; done
+    } || true
   done
 fi
 
@@ -273,6 +300,7 @@ fi
 # -----------------------------
 if [ "$DO_IMDS" = true ]; then
   log "IMDS query"
+  ensure_outdir
   IMDS_OUT="${OUTDIR}/imds.txt"
   set +e
   TOKEN="$(curl -sS -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds:21600' -m 5 2>/dev/null || true)"
@@ -299,6 +327,7 @@ fi
 # -----------------------------
 if [ "$DO_REPOS" = true ]; then
   log "Repo discovery + bundled scanners"
+  ensure_outdir
   REPO_TARGETS="${OUTDIR}/scan_targets.txt"
   : > "${REPO_TARGETS}"
 
@@ -343,7 +372,8 @@ fi
 # -----------------------------
 if [ "$DO_STS" = true ] && [ "${HAS_AWSCLI}" = "true" ]; then
   log "STS read-only identity checks (authorized only) using ${AWSCLI_BIN}"
-  if env | egrep -qi 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN'; then
+  ensure_outdir
+  if env | grep -Eqi 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN'; then
     AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
       "${AWSCLI_BIN}" sts get-caller-identity --output json > "${OUTDIR}/sts_env.json" 2>"${OUTDIR}/sts_env.err" || true
   fi
@@ -368,6 +398,7 @@ fi
 # 8) Unified hits index + scoring
 # -----------------------------
 log "Build unified hits index and severity scoring"
+ensure_outdir
 INDEX="${OUTDIR}/hits_index.csv"
 SCORED="${OUTDIR}/hits_scored.csv"
 MD="${OUTDIR}/FINDINGS.md"
@@ -460,13 +491,13 @@ tail -n +2 "$INDEX" | while IFS= read -r row; do
   if PAIR_CHECK "$file"; then
     sev="critical"
   else
-    echo "$detail" | egrep -qi "$SKEY_RE" && sev="high"
-    if echo "$detail" | egrep -qi "$AKIA_RE"; then
-      echo "$file" | egrep -qi '\.env|\.tfvars|\.tfstate|credentials|\.ya?ml|\.json|\.properties|/var/www|/opt|/srv' && sev="high"
+    echo "$detail" | grep -Eqi "$SKEY_RE" && sev="high"
+    if echo "$detail" | grep -Eqi "$AKIA_RE"; then
+      echo "$file" | grep -Eqi '\.env|\.tfvars|\.tfstate|credentials|\.ya?ml|\.json|\.properties|/var/www|/opt|/srv' && sev="high"
       [ "$sev" = "low" ] && sev="medium"
     fi
-    echo "$detail" | egrep -qi "$TOK_RE|$SSO_RE" && [ "$sev" = "low" ] && sev="medium"
-    echo "$detail" | egrep -qi "$BENIGN_RE" && [ "$sev" = "low" ] && sev="low"
+    echo "$detail" | grep -Eqi "$TOK_RE|$SSO_RE" && [ "$sev" = "low" ] && sev="medium"
+    echo "$detail" | grep -Eqi "$BENIGN_RE" && [ "$sev" = "low" ] && sev="low"
   fi
 
   printf "%s,%s,%s,\"%s\",%s,\"%s\"\n" "$sev" "$src" "$typ" "$file" "$line" "$detail" >> "$SCORED"
@@ -503,6 +534,7 @@ echo "  - Markdown:      ${MD}"
 # 9) Summary (+ optional redacted)
 # -----------------------------
 log "Write summary"
+ensure_outdir
 {
   echo "AWS Bastion Non-Root — Summary"
   echo "==============================="
