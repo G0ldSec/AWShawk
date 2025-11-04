@@ -10,7 +10,6 @@ A precision AWS credential hunter designed for penetration testing. AWShawk perf
 
 ## 🎯 Features
 
-- **Zero Installation**: Portable helper binaries bundled in `./helper/` (gitleaks, trufflehog, aws-cli, jq)
 - **Non-Root Operation**: Runs with standard user privileges
 - **Modular Scanning**: Enable only the checks you need with granular flags
 - **Wide Mode**: Comprehensive filesystem crawl from `/` (excludes noisy system dirs)
@@ -33,6 +32,10 @@ cd AWShawk
 
 # Make executable
 chmod +x awshawk.sh
+
+# (Optional) Install the helpers for the best results
+chmod +x install_helpers.sh
+./install_helpers.sh
 
 # Run all checks with wide mode and redacted summary
 ./awshawk.sh -all -wide -redact
