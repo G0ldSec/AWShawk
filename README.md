@@ -28,7 +28,7 @@ A precision AWS credential hunter designed for penetration testing. AWShawk perf
 ## 🚀 Quick Start
 ```bash
 # Clone the repository
-git clone https://github.com/ChiZu/AWShawk.git
+git clone https://github.com/G0ldSec/AWShawk.git
 cd AWShawk
 
 # Make executable
@@ -274,7 +274,7 @@ Contributions welcome! Areas for enhancement:
 - ✅ Follow responsible disclosure practices
 - ❌ Unauthorized access to computer systems is illegal
 
-The author (ChiZu) is not responsible for misuse or damage caused by this tool.
+The author is not responsible for misuse or damage caused by this tool.
 
 ---
 
